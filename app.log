@@ -1,0 +1,62 @@
+2025-04-02 17:08:17,552 [INFO] Use pytorch device_name: cpu
+2025-04-02 17:08:17,552 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 17:09:31,006 [INFO] Use pytorch device_name: cpu
+2025-04-02 17:09:31,008 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 17:23:21,193 [INFO] Getting links from: https://rajalakshmi.org (depth 0)
+2025-04-02 17:23:21,316 [INFO] Filtering 13 links using Gemini AI
+2025-04-02 17:23:23,422 [INFO] Successfully filtered to 3 relevant links
+2025-04-02 17:23:23,437 [INFO] Fetching content from: https://rajalakshmi.org/contact-us.php
+2025-04-02 17:23:25,117 [INFO] Fetching content from: https://rajalakshmi.org/careers
+2025-04-02 17:23:26,721 [INFO] Fetching content from: https://rajalakshmi.org
+2025-04-02 17:44:59,114 [INFO] Use pytorch device_name: cpu
+2025-04-02 17:44:59,117 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 17:45:20,462 [INFO] Saved PDF file to scraped_content\pdf_WSL Installation 1_07ddfb0b.pdf
+2025-04-02 17:45:20,465 [INFO] Reset session state from previous source: pdf_WSL Installation 1_07ddfb0b
+2025-04-02 17:45:24,753 [INFO] Saved PDF file to scraped_content\pdf_WSL Installation 1_f0174d8c.pdf
+2025-04-02 17:45:27,388 [INFO] Reset session state from previous source: pdf_WSL Installation 1_f0174d8c
+2025-04-02 17:46:02,049 [INFO] Saved PDF file to scraped_content\pdf_WSL Installation 1_f4fe454b.pdf
+2025-04-02 17:46:02,487 [INFO] Reset session state from previous source: pdf_WSL Installation 1_f4fe454b
+2025-04-02 17:48:55,648 [INFO] Saved PDF file to scraped_content\pdf_WSL Installation 1_05bb7756.pdf
+2025-04-02 17:48:58,147 [INFO] Reset session state from previous source: pdf_WSL Installation 1_05bb7756
+2025-04-02 17:51:16,877 [INFO] Use pytorch device_name: cpu
+2025-04-02 17:51:16,877 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 17:51:38,388 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_71a42863.pdf
+2025-04-02 17:51:38,404 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_71a42863
+2025-04-02 17:51:42,558 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_264b95f5.pdf
+2025-04-02 17:51:45,367 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_264b95f5
+2025-04-02 18:04:20,237 [INFO] Use pytorch device_name: cpu
+2025-04-02 18:04:20,238 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 18:04:38,247 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_20433ef5.pdf
+2025-04-02 18:04:38,257 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_20433ef5
+2025-04-02 18:04:45,041 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_d193c549.pdf
+2025-04-02 18:04:47,926 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_d193c549
+2025-04-02 18:05:12,833 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_128c8387.pdf
+2025-04-02 18:05:12,833 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_128c8387
+2025-04-02 18:05:36,413 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_94dfcf0e.pdf
+2025-04-02 18:05:36,413 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_94dfcf0e
+2025-04-02 18:05:37,912 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_41934c94.pdf
+2025-04-02 18:05:38,441 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_41934c94
+2025-04-02 18:05:47,182 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_8bfbf0f0.pdf
+2025-04-02 18:05:47,185 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_8bfbf0f0
+2025-04-02 18:07:03,343 [INFO] Use pytorch device_name: cpu
+2025-04-02 18:07:03,343 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 18:16:30,572 [INFO] Use pytorch device_name: cpu
+2025-04-02 18:16:30,572 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 18:16:52,487 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_b001a2fb.pdf
+2025-04-02 18:16:52,495 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_b001a2fb
+2025-04-02 18:16:55,217 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_48439032.pdf
+2025-04-02 18:16:58,575 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_48439032
+2025-04-02 18:17:10,673 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_20f0ad24.pdf
+2025-04-02 18:17:10,673 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_20f0ad24
+2025-04-02 18:17:19,094 [INFO] Saved PDF file to scraped_content\pdf_UiPath Installation Process 1_852fd008.pdf
+2025-04-02 18:17:19,098 [INFO] Reset session state from previous source: pdf_UiPath Installation Process 1_852fd008
+2025-04-02 18:22:57,977 [INFO] Use pytorch device_name: cpu
+2025-04-02 18:22:57,977 [INFO] Load pretrained SentenceTransformer: sentence-transformers/all-MiniLM-L6-v2
+2025-04-02 18:23:14,927 [INFO] Saved PDF file to scraped_content\pdf_SQL_2025_Raghav V_fcc3f551.pdf
+2025-04-02 18:23:14,930 [INFO] Reset session state from previous source: pdf_SQL_2025_Raghav V_fcc3f551
+2025-04-02 18:23:18,220 [INFO] Saved PDF file to scraped_content\pdf_SQL_2025_Raghav V_01b21847.pdf
+2025-04-02 18:23:22,034 [INFO] Reset session state from previous source: pdf_SQL_2025_Raghav V_01b21847
+2025-04-02 18:23:32,427 [INFO] Saved PDF file to scraped_content\pdf_SQL_2025_Raghav V_26e290c8.pdf
+2025-04-02 18:23:32,427 [INFO] Reset session state from previous source: pdf_SQL_2025_Raghav V_26e290c8
+2025-04-02 18:23:39,752 [INFO] Saved PDF file to scraped_content\pdf_SQL_2025_Raghav V_8ce6f480.pdf
+2025-04-02 18:23:39,757 [INFO] Reset session state from previous source: pdf_SQL_2025_Raghav V_8ce6f480
