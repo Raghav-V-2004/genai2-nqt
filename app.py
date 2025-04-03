@@ -9,6 +9,7 @@ import PyPDF2
 import requests
 import dotenv
 import pandas as pd
+import uuid
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from concurrent.futures import ThreadPoolExecutor
@@ -22,16 +23,12 @@ dotenv.load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
  
-# Check if API keys are available
-if not GEMINI_API_KEY:
+# Configure Gemini API
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+else:
     st.error("GEMINI_API_KEY not found in .env file!")
    
-if not PINECONE_API_KEY:
-    st.error("PINECONE_API_KEY not found in .env file!")
- 
-# Configure Gemini API
-genai.configure(api_key=GEMINI_API_KEY)
- 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
@@ -55,8 +52,14 @@ CONFIG = {
  
 # Create output directory
 os.makedirs(CONFIG["output_dir"], exist_ok=True)
- 
+st.set_page_config(
+    page_title="Content Assistant",
+    page_icon="📄",
+    layout="wide"
+)
 # Initialize session state
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 if 'data_processed' not in st.session_state:
     st.session_state.data_processed = False
 if 'extracted_text' not in st.session_state:
@@ -64,7 +67,15 @@ if 'extracted_text' not in st.session_state:
 if 'doc_id' not in st.session_state:
     st.session_state.doc_id = ""
 if 'source_type' not in st.session_state:
-    st.session_state.source_type = ""  # Track if the data is from PDF or website
+    st.session_state.source_type = ""
+if 'source_url' not in st.session_state:
+    st.session_state.source_url = ""
+if 'source_name' not in st.session_state:
+    st.session_state.source_name = ""
+if 'source_links' not in st.session_state:
+    st.session_state.source_links = {}  # Dictionary to store source links
+if 'namespace' not in st.session_state:
+    st.session_state.namespace = ""  # For context isolation in Pinecone
  
 # Load embedding model
 @st.cache_resource
@@ -76,21 +87,32 @@ embed_model = get_embedding_model()
 # Initialize Pinecone client
 @st.cache_resource
 def init_pinecone():
-    pc = pinecone.Pinecone(api_key=PINECONE_API_KEY)
-    index_name = "newindex"
-    # Check if index exists, create if it doesn't
-    if index_name not in [index.name for index in pc.list_indexes()]:
-        pc.create_index(
-            name=index_name,
-            spec=pinecone.PodSpec(
-                environment="us-east-1",
-                metric="cosine",
-                dimension=384  # Set the correct dimension for your embeddings
+    if not PINECONE_API_KEY:
+        st.error("PINECONE_API_KEY not found in .env file!")
+        return None
+        
+    try:
+        pc = pinecone.Pinecone(api_key=PINECONE_API_KEY)
+        index_name = "newindex"
+        
+        # Check if index exists, create if it doesn't
+        existing_indexes = [index.name for index in pc.list_indexes()]
+        if index_name not in existing_indexes:
+            pc.create_index(
+                name=index_name,
+                spec=pinecone.PodSpec(
+                    environment="us-east-1",
+                    metric="cosine",
+                    dimension=384  # Set the correct dimension for your embeddings
+                )
             )
-        )
-    
-    index = pc.Index(index_name)
-    return index
+        
+        index = pc.Index(index_name)
+        return index
+    except Exception as e:
+        st.error(f"Error initializing Pinecone: {e}")
+        logger.error(f"Error initializing Pinecone: {e}")
+        return None
  
 index = init_pinecone()
  
@@ -104,7 +126,7 @@ HEADERS = {
 }
  
 # Common Functions
- 
+
 def clean_text(text):
     """Clean and normalize text content."""
     # Remove extra whitespace
@@ -112,90 +134,204 @@ def clean_text(text):
     # Remove non-printable characters
     text = re.sub(r'[\x00-\x1F\x7F-\x9F]', '', text)
     return text
+
+def create_new_session():
+    """Create a new session and reset state variables."""
+    st.session_state.session_id = str(uuid.uuid4())
+    st.session_state.data_processed = False
+    st.session_state.extracted_text = ""
+    st.session_state.doc_id = ""
+    st.session_state.source_type = ""
+    st.session_state.source_url = ""
+    st.session_state.source_name = ""
+    st.session_state.source_links = {}
+    st.session_state.namespace = f"ns_{st.session_state.session_id[:8]}"
+    
+    # Clear previous embeddings for this session if they exist
+    if index:
+        try:
+            index.delete(delete_all=True, namespace=st.session_state.namespace)
+            logger.info(f"Cleared previous embeddings for namespace {st.session_state.namespace}")
+        except Exception as e:
+            logger.warning(f"No previous embeddings to clear or error: {e}")
+
+def generate_chunk_id(doc_id, chunk_index):
+    """Generate a unique ID for each text chunk."""
+    return f"{doc_id}_{chunk_index}"
+
+def chunk_text(text, max_chunk_size=1000, overlap=100):
+    """Split text into manageable chunks with overlap."""
+    chunks = []
+    start = 0
+    text_length = len(text)
+    
+    while start < text_length:
+        end = min(start + max_chunk_size, text_length)
+        
+        # If not at the end of text, try to find a sentence boundary
+        if end < text_length:
+            # Find the last period, question mark, or exclamation point
+            last_period = max(
+                text.rfind('. ', start, end),
+                text.rfind('? ', start, end),
+                text.rfind('! ', start, end)
+            )
+            
+            if last_period != -1:
+                end = last_period + 1  # Include the period
+        
+        chunks.append(text[start:end].strip())
+        start = end - overlap if end < text_length else end
+        
+    return chunks
  
-def store_embeddings(text, doc_id, source_type):
-    """Store text embeddings in Pinecone with metadata."""
+def store_embeddings(text, doc_id, source_type, source_url="", source_name=""):
+    """Store text embeddings in Pinecone with metadata using current namespace."""
+    if not index:
+        st.error("Pinecone index is not initialized.")
+        return False
+        
     try:
-        # Split text into sentences or chunks
-        sentences = text.split(". ")
+        # Update source tracking
+        if source_url and source_url not in st.session_state.source_links:
+            st.session_state.source_links[source_url] = source_name or source_url
+            
+        # Split text into manageable chunks
+        chunks = chunk_text(text)
  
-        if not sentences:
+        if not chunks:
             st.warning("No text to embed.")
-            return
+            return False
  
         # Create embeddings
         with st.spinner("Creating embeddings..."):
-            embeddings = embed_model.encode(sentences).tolist()
- 
-        # Create vectors for Pinecone, including metadata with document ID
-        vectors = [(f"{doc_id}_{i}", embeddings[i], {
-            "text": sentences[i],
-            "source": doc_id,  # Add document ID as metadata
-            "source_type": source_type})
-                  for i in range(len(sentences))]
+            all_vectors = []
+            
+            # Process chunks in batches to avoid memory issues
+            for i, chunk in enumerate(chunks):
+                chunk_id = generate_chunk_id(doc_id, i)
+                embedding = embed_model.encode([chunk]).tolist()[0]
+                
+                # Create vector with metadata
+                vector = (chunk_id, embedding, {
+                    "text": chunk,
+                    "source": doc_id,
+                    "source_type": source_type,
+                    "source_url": source_url,
+                    "source_name": source_name or doc_id
+                })
+                
+                all_vectors.append(vector)
  
         # Upload to Pinecone in batches
         batch_size = 100
-        total_vectors = len(vectors)
+        total_vectors = len(all_vectors)
  
         # Initialize the progress bar
         progress_bar = st.progress(0)
  
         for i in range(0, total_vectors, batch_size):
             end_idx = min(i + batch_size, total_vectors)
-            batch = vectors[i:end_idx]
-            index.upsert(batch)
+            batch = all_vectors[i:end_idx]
+            
+            # Use the session-specific namespace
+            index.upsert(vectors=batch, namespace=st.session_state.namespace)
            
             # Update progress
             progress_bar.progress((end_idx) / total_vectors)
  
-        st.success(f"Successfully stored {len(vectors)} embeddings in Pinecone!")
+        st.success(f"Successfully stored {len(all_vectors)} text chunks in the database!")
         st.session_state.data_processed = True
         return True
+        
     except Exception as e:
-        st.error(f"Error storing embeddings in Pinecone: {e}")
+        st.error(f"Error storing embeddings: {e}")
         logger.error(f"Error storing embeddings: {e}")
         return False
  
 def retrieve_relevant_text(query):
-    """Retrieve relevant text from Pinecone based on query."""
+    """Retrieve relevant text from Pinecone based on query within current namespace."""
+    if not index:
+        st.error("Pinecone index is not initialized.")
+        return "Database connection error.", "", ""
+        
     try:
         query_embedding = embed_model.encode([query]).tolist()[0]
-        results = index.query(vector=query_embedding, top_k=10, include_metadata=True)
+        results = index.query(
+            vector=query_embedding, 
+            top_k=5, 
+            include_metadata=True,
+            namespace=st.session_state.namespace
+        )
        
         if results['matches']:
             contexts = []
-            sources = set()
-            source_types = set()
+            sources = {}  # Dictionary to track sources with their URLs
            
             for match in results['matches']:
-                contexts.append(match['metadata']['text'])
-                if 'source' in match['metadata']:
-                    sources.add(match['metadata']['source'])
-                if 'source_type' in match['metadata']:
-                    source_types.add(match['metadata']['source_type'])
+                if match['score'] < 0.6:  # Relevance threshold
+                    continue
+                    
+                # Get text and source information
+                if 'metadata' in match and 'text' in match['metadata']:
+                    contexts.append(match['metadata']['text'])
+                    
+                    # Track source with URL if available
+                    if 'source_url' in match['metadata'] and match['metadata']['source_url']:
+                        source_key = match['metadata']['source']
+                        sources[source_key] = {
+                            'url': match['metadata']['source_url'],
+                            'name': match['metadata']['source_name'],
+                            'type': match['metadata']['source_type']
+                        }
+                    elif 'source' in match['metadata']:
+                        source_key = match['metadata']['source']
+                        sources[source_key] = {
+                            'name': match['metadata']['source_name'],
+                            'type': match['metadata']['source_type']
+                        }
            
-            relevant_text = "\n".join(contexts)
+            if not contexts:
+                return "No sufficiently relevant text found.", "", ""
+                
+            relevant_text = "\n\n".join(contexts)
            
-            # Make PDF source clickable
-            source_info = ""
-            for source in sources:
-                if source.startswith("pdf_"):  # Check if it's a PDF
-                    source_info += f"[PDF: {source}]({CONFIG['output_dir']}/{source}.pdf)\n"
+            # Format source info for display
+            source_links = []
+            source_types = set()
+            
+            for source_key, source_data in sources.items():
+                source_types.add(source_data.get('type', ''))
+                
+                if source_data.get('type') == 'pdf':
+                    source_name = source_data.get('name', source_key)
+                    if source_data.get('url'):
+                        source_links.append(f"[PDF: {source_name}]({source_data['url']})")
+                    else:
+                        source_links.append(f"PDF: {source_name}")
+                elif source_data.get('url'):
+                    source_name = source_data.get('name', source_data['url'])
+                    source_links.append(f"[Web: {source_name}]({source_data['url']})")
                 else:
-                    source_info += f"Source: {source}\n"
+                    source_links.append(f"Source: {source_data.get('name', source_key)}")
            
-            source_type_info = f"Source Types: {', '.join(source_types)}" if source_types else ""
+            source_info = "\n".join(source_links)
+            source_type_info = ", ".join(source_types)
            
             return relevant_text, source_info, source_type_info
+        
         return "No relevant text found.", "", ""
+        
     except Exception as e:
-        st.error(f"Error querying Pinecone: {e}")
-        logger.error(f"Error querying Pinecone: {e}")
-        return f"Error querying Pinecone: {e}", "", ""
+        st.error(f"Error querying database: {e}")
+        logger.error(f"Error querying database: {e}")
+        return f"Error querying database: {e}", "", ""
  
 def send_to_gemini(query, retrieved_text):
     """Send query and text to Gemini for response generation."""
+    if not GEMINI_API_KEY:
+        return "Gemini API key not configured."
+        
     try:
         model = genai.GenerativeModel(CONFIG["model_name"])
  
@@ -227,11 +363,18 @@ def extract_text_from_pdf(pdf_file):
         with st.spinner("Extracting text from PDF..."):
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             text = " ".join(page.extract_text() for page in pdf_reader.pages if page.extract_text())
-            return clean_text(text)
+            clean_content = clean_text(text)
+            
+            # Save PDF file for future reference
+            pdf_path = os.path.join(CONFIG["output_dir"], f"{pdf_file.name}")
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_file.getvalue())
+                
+            return clean_content, pdf_path
     except Exception as e:
         st.error(f"Error extracting text from PDF: {e}")
         logger.error(f"Error extracting text from PDF: {e}")
-        return ""
+        return "", ""
  
 # Web Scraping Functions
  
@@ -320,6 +463,10 @@ def filter_relevant_links(links, query):
     if not links:
         logger.warning("No links to filter")
         return []
+        
+    if not GEMINI_API_KEY:
+        logger.warning("Gemini API key not configured, returning first 5 links")
+        return list(links)[:5]
        
     logger.info(f"Filtering {len(links)} links using Gemini AI")
    
@@ -370,10 +517,10 @@ def filter_relevant_links(links, query):
                 return relevant_links
         except:
             logger.warning("Couldn't parse Gemini's response as a list")
-            return []
+            return list(links)[:5]  # Just return the first 5 links
     except Exception as e:
         logger.error(f"Error in filtering links: {e}")
-        return []
+        return list(links)[:5]  # Just return the first 5 links
  
  
 def crawl_website(url, query):
@@ -387,7 +534,7 @@ def crawl_website(url, query):
             st.warning(f"No links found for {url}")
             # Just extract from the main URL if no links found
             text = extract_text_from_url(url)
-            return text if text else ""
+            return text if text else "", {url: "Main Page"}
        
         # Filter links to find the most relevant ones based on query
         relevant_links = filter_relevant_links(list(all_links), query)
@@ -400,96 +547,203 @@ def crawl_website(url, query):
    
     # Extract text from relevant pages
     full_text = ""
+    page_links = {}
+    
     for link in relevant_links:
         page_text = extract_text_from_url(link)
         if page_text:
             full_text += page_text
+            # Store the link with a page title (using URL as fallback)
+            parsed_url = urlparse(link)
+            page_name = parsed_url.path.split('/')[-1]
+            if not page_name:
+                page_name = parsed_url.netloc
+            page_links[link] = page_name.replace('-', ' ').replace('_', ' ').capitalize()
+            
         time.sleep(CONFIG["sleep_between_requests"])
    
-    return full_text if full_text else ""
+    return full_text if full_text else "", page_links
  
 # Main Application Code (Streamlit UI)
  
-st.title("PDF and Website Content Processing App")
- 
-tabs = st.tabs(["Upload PDF", "Enter Website URL"])
- 
-with tabs[0]:
-    uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
- 
-    if uploaded_file:
-        # Reset session state when uploading new file
-        st.session_state.extracted_text = ""
-        st.session_state.doc_id = ""
-        st.session_state.source_type = "pdf"
-       
-        # Extract text from PDF
-        extracted_text = extract_text_from_pdf(uploaded_file)
- 
-        if extracted_text:
-            st.session_state.extracted_text = extracted_text
-            st.session_state.doc_id = f"pdf_{uploaded_file.name}"
-            st.success(f"Successfully extracted {len(extracted_text)} characters from PDF")
-           
-            # Store embeddings
-            if st.button("Process PDF", key="process_pdf"):
-                store_embeddings(extracted_text, st.session_state.doc_id, "pdf")
- 
- 
-with tabs[1]:
-    url = st.text_input("Enter website URL", "https://")
- 
-    if url:
-        # Reset session state when entering new URL
-        st.session_state.extracted_text = ""
-        st.session_state.doc_id = ""
-        st.session_state.source_type = "website"
- 
-        if st.button("Crawl Website", key="crawl_website"):
-            # Crawl the website and extract content
-            extracted_text = crawl_website(url, "company information")
- 
-            if extracted_text:
-                st.session_state.extracted_text = extracted_text
-                st.session_state.doc_id = f"web_{urlparse(url).netloc}"
-                st.success(f"Successfully extracted content from website")
- 
-                # Store embeddings
-                store_embeddings(extracted_text, st.session_state.doc_id, "website")
- 
-# Querying Section
- 
-if st.session_state.data_processed:
-    st.markdown("---")
-    st.subheader("Ask Questions About the Content")
-    query = st.text_input("Enter your query:")
- 
-    if query:
-        if st.button("Generate Answer", key="generate"):
-            with st.spinner("Retrieving relevant information..."):
-                retrieved_text, source_info, source_type_info = retrieve_relevant_text(query)
- 
-            if retrieved_text and retrieved_text != "No relevant text found.":
-                with st.spinner("Generating AI response..."):
-                    response = send_to_gemini(query, retrieved_text)
- 
-                # Display results
-                st.markdown("### AI Response:")
-                st.markdown(response)
- 
-                # Show sources
-                if source_info:
-                    st.markdown("#### Sources:")
-                    st.markdown(source_info)
- 
-                if source_type_info:
-                    st.markdown(f"#### Source Type: {source_type_info}")
- 
-                # Optionally show context
-                with st.expander("Show retrieved context"):
-                    st.markdown(retrieved_text)
-            else:
-                st.warning("No relevant information found for your query. Try a different question.")
- 
- 
- 
+
+
+# Custom CSS for better UI
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #4682b4;
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .card {
+        border-radius: 5px;
+        background-color: #f9f9f9;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    .response-area {
+        background-color: #f0f8ff;
+        border-left: 5px solid #4682b4;
+        padding: 15px;
+        margin-top: 10px;
+    }
+    .source-link {
+        font-size: 0.8rem;
+        color: #666;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("<h1 class='main-header'>Content Assistant</h1>", unsafe_allow_html=True)
+
+# Create a sidebar for session management
+with st.sidebar:
+    st.header("Session Controls")
+    if st.button("Start New Session"):
+        create_new_session()
+        st.success("Created new session!")
+    
+    st.divider()
+    st.write(f"Current Session ID: {st.session_state.session_id[:8]}...")
+    if st.session_state.source_name:
+        st.write(f"Current Source: {st.session_state.source_name}")
+    elif st.session_state.doc_id:
+        st.write(f"Current Source ID: {st.session_state.doc_id}")
+
+# Main content area
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.markdown("<h2 class='sub-header'>Upload Content</h2>", unsafe_allow_html=True)
+    
+    tabs = st.tabs(["PDF Document", "Website URL"])
+    
+    with tabs[0]:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
+        
+        if uploaded_file:
+            # Reset previous data when uploading new file
+            if st.session_state.doc_id and not st.session_state.doc_id.startswith(f"pdf_{uploaded_file.name}"):
+                if st.button("Process New PDF", help="This will replace your current session data"):
+                    create_new_session()
+                    
+            # Only show process button when we have a new file
+            if not st.session_state.data_processed or st.session_state.doc_id != f"pdf_{uploaded_file.name}":
+                if st.button("Process PDF", key="process_pdf"):
+                    # Extract text from PDF
+                    extracted_text, pdf_path = extract_text_from_pdf(uploaded_file)
+            
+                    if extracted_text:
+                        st.session_state.extracted_text = extracted_text
+                        st.session_state.doc_id = f"pdf_{uploaded_file.name}"
+                        st.session_state.source_type = "pdf"
+                        st.session_state.source_url = pdf_path
+                        st.session_state.source_name = uploaded_file.name
+                        
+                        # Store embeddings
+                        success = store_embeddings(
+                            extracted_text, 
+                            st.session_state.doc_id, 
+                            "pdf",
+                            pdf_path,  # URL is the local path
+                            uploaded_file.name
+                        )
+                        
+                        if success:
+                            st.success(f"Successfully processed PDF with {len(extracted_text)} characters")
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    with tabs[1]:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        url = st.text_input("Enter website URL", "https://")
+        
+        if url and url != "https://":
+            # Reset previous data when entering new URL
+            if st.session_state.doc_id and not st.session_state.doc_id.startswith(f"web_{urlparse(url).netloc}"):
+                if st.button("Crawl New Website", help="This will replace your current session data"):
+                    create_new_session()
+            
+            # Only show crawl button when we have a new URL
+            if not st.session_state.data_processed or st.session_state.doc_id != f"web_{urlparse(url).netloc}":
+                query = st.text_input("Enter a topic to focus crawling on (e.g., 'product information')", "company information")
+                
+                if st.button("Crawl Website", key="crawl_website"):
+                    # Crawl the website and extract content
+                    extracted_text, page_links = crawl_website(url, query)
+        
+                    if extracted_text:
+                        st.session_state.extracted_text = extracted_text
+                        st.session_state.doc_id = f"web_{urlparse(url).netloc}"
+                        st.session_state.source_type = "website"
+                        st.session_state.source_url = url
+                        st.session_state.source_name = urlparse(url).netloc
+                        st.session_state.source_links.update(page_links)
+                        
+                        # Store embeddings
+                        success = store_embeddings(
+                            extracted_text, 
+                            st.session_state.doc_id, 
+                            "website",
+                            url,
+                            urlparse(url).netloc
+                        )
+                        
+                        if success:
+                            st.success(f"Successfully processed website content")
+                            for link, title in page_links.items():
+                                st.markdown(f"- [{title}]({link})")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+with col2:
+    # Only show querying section after data is processed
+    if st.session_state.data_processed:
+        st.markdown("<h2 class='sub-header'>Ask Questions</h2>", unsafe_allow_html=True)
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        
+        query = st.text_area("Enter your question about the content:", height=100)
+        
+        if query:
+            if st.button("Generate Answer", key="generate"):
+                with st.spinner("Retrieving relevant information..."):
+                    retrieved_text, source_info, source_type_info = retrieve_relevant_text(query)
+                
+                if retrieved_text and retrieved_text != "No relevant text found.":
+                    with st.spinner("Generating AI response..."):
+                        response = send_to_gemini(query, retrieved_text)
+                
+                    # Display results
+                    st.markdown("<div class='response-area'>", unsafe_allow_html=True)
+                    st.markdown("### Answer:")
+                    st.markdown(response)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                
+                    # Show sources
+                    if source_info:
+                        st.markdown("<div class='source-link'>", unsafe_allow_html=True)
+                        st.markdown("#### Sources:")
+                        st.markdown(source_info)
+                        st.markdown("</div>", unsafe_allow_html=True)
+                
+                    # Optionally show context
+                    with st.expander("Show retrieved context"):
+                        st.markdown(retrieved_text)
+                else:
+                    st.warning("No relevant information found for your query. Try a different question.")
+                    
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.markdown("<h2 class='sub-header'>Get Started</h2>", unsafe_allow_html=True)
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("""
+        To start using the content assistant:
+        
+        1. First, upload a PDF document or enter a website URL
+        2. Process the content to extract information
+        3. Once processing is complete, you can ask questions about the content""")
