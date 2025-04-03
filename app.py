@@ -75,7 +75,7 @@ if 'source_name' not in st.session_state:
 if 'source_links' not in st.session_state:
     st.session_state.source_links = {}  # Dictionary to store source links
 if 'namespace' not in st.session_state:
-    st.session_state.namespace = ""  # For context isolation in Pinecone
+    st.session_state.namespace = f"ns_{str(uuid.uuid4())[:8]}"  # Initialize with a random namespace
  
 # Load embedding model
 @st.cache_resource
@@ -93,21 +93,35 @@ def init_pinecone():
         
     try:
         pc = pinecone.Pinecone(api_key=PINECONE_API_KEY)
-        index_name = "newindex"
+        index_name = "onepiece"
+        
+        # Add debugging information
+        logger.info("Initializing Pinecone connection")
         
         # Check if index exists, create if it doesn't
         existing_indexes = [index.name for index in pc.list_indexes()]
+        logger.info(f"Existing indexes: {existing_indexes}")
+        
         if index_name not in existing_indexes:
+            logger.info(f"Creating new index: {index_name}")
             pc.create_index(
                 name=index_name,
                 spec=pinecone.PodSpec(
                     environment="us-east-1",
                     metric="cosine",
-                    dimension=384  # Set the correct dimension for your embeddings
+                    dimension=384  # Make sure this matches your model's dimension
                 )
             )
         
         index = pc.Index(index_name)
+        
+        # Test index connection
+        try:
+            stats = index.describe_index_stats()
+            logger.info(f"Index stats: {stats}")
+        except Exception as e:
+            logger.error(f"Error getting index stats: {e}")
+        
         return index
     except Exception as e:
         st.error(f"Error initializing Pinecone: {e}")
@@ -150,8 +164,11 @@ def create_new_session():
     # Clear previous embeddings for this session if they exist
     if index:
         try:
-            index.delete(delete_all=True, namespace=st.session_state.namespace)
-            logger.info(f"Cleared previous embeddings for namespace {st.session_state.namespace}")
+            # Check if namespace exists before trying to delete
+            stats = index.describe_index_stats()
+            if st.session_state.namespace in stats.namespaces:
+                index.delete(delete_all=True, namespace=st.session_state.namespace)
+                logger.info(f"Cleared previous embeddings for namespace {st.session_state.namespace}")
         except Exception as e:
             logger.warning(f"No previous embeddings to clear or error: {e}")
 
@@ -210,7 +227,8 @@ def store_embeddings(text, doc_id, source_type, source_url="", source_name=""):
             # Process chunks in batches to avoid memory issues
             for i, chunk in enumerate(chunks):
                 chunk_id = generate_chunk_id(doc_id, i)
-                embedding = embed_model.encode([chunk]).tolist()[0]
+                # Fix: Properly convert embeddings to list
+                embedding = embed_model.encode(chunk).tolist()
                 
                 # Create vector with metadata
                 vector = (chunk_id, embedding, {
@@ -256,7 +274,23 @@ def retrieve_relevant_text(query):
         return "Database connection error.", "", ""
         
     try:
-        query_embedding = embed_model.encode([query]).tolist()[0]
+        # Fix: Properly encode the query
+        query_embedding = embed_model.encode(query).tolist()
+        
+        # Check if namespace exists and has data
+        stats = index.describe_index_stats()
+        logger.info(f"Index stats: {stats}")
+        logger.info(f"Current namespace: {st.session_state.namespace}")
+        
+        if st.session_state.namespace not in stats.namespaces:
+            logger.warning(f"Namespace {st.session_state.namespace} not found in index")
+            return "No data found. Please process content first.", "", ""
+            
+        if stats.namespaces[st.session_state.namespace].vector_count == 0:
+            logger.warning(f"No vectors in namespace {st.session_state.namespace}")
+            return "No data found in the current session.", "", ""
+        
+        # Perform the query
         results = index.query(
             vector=query_embedding, 
             top_k=5, 
@@ -269,12 +303,15 @@ def retrieve_relevant_text(query):
             sources = {}  # Dictionary to track sources with their URLs
            
             for match in results['matches']:
-                if match['score'] < 0.6:  # Relevance threshold
+                # Fix: Lower the relevance threshold or remove it
+                if match['score'] < 0.1:  # Lowered threshold from 0.6 to 0.5
+                    logger.info(f"Skipping result with score {match['score']}")
                     continue
                     
                 # Get text and source information
                 if 'metadata' in match and 'text' in match['metadata']:
                     contexts.append(match['metadata']['text'])
+                    logger.info(f"Added context with score {match['score']}")
                     
                     # Track source with URL if available
                     if 'source_url' in match['metadata'] and match['metadata']['source_url']:
@@ -349,7 +386,7 @@ def send_to_gemini(query, retrieved_text):
         """
        
         response = model.generate_content(prompt)
-        return response.text if response else "No response generated."
+        return response.text if hasattr(response, 'text') else str(response)
     except Exception as e:
         st.error(f"Error generating content with Gemini: {e}")
         logger.error(f"Error generating content with Gemini: {e}")
@@ -476,7 +513,7 @@ def filter_relevant_links(links, query):
     Query: {query}
    
     Website links:
-    {links}
+    {list(links)[:20]}  # Limit to first 20 links to avoid token limits
    
     Instructions:
     1. Analyze each link and evaluate its potential to contain information related to the query.
@@ -489,9 +526,9 @@ def filter_relevant_links(links, query):
         model = genai.GenerativeModel(CONFIG["model_name"])
         response = model.generate_content(prompt)
        
-        if not response or not response.text:
+        if not response or not hasattr(response, 'text') or not response.text:
             logger.error("Empty response from Gemini API")
-            return []
+            return list(links)[:5]
            
         raw_text = response.text.strip()
        
@@ -566,8 +603,6 @@ def crawl_website(url, query):
  
 # Main Application Code (Streamlit UI)
  
-
-
 # Custom CSS for better UI
 st.markdown("""
 <style>
@@ -709,12 +744,12 @@ with col2:
         
         query = st.text_area("Enter your question about the content:", height=100)
         
-        if query:
-            if st.button("Generate Answer", key="generate"):
+        if st.button("Generate Answer", key="generate"):
+            if query:  # Only process if there's a query
                 with st.spinner("Retrieving relevant information..."):
                     retrieved_text, source_info, source_type_info = retrieve_relevant_text(query)
                 
-                if retrieved_text and retrieved_text != "No relevant text found.":
+                if retrieved_text and retrieved_text not in ["No relevant text found.", "No sufficiently relevant text found."]:
                     with st.spinner("Generating AI response..."):
                         response = send_to_gemini(query, retrieved_text)
                 
@@ -736,6 +771,8 @@ with col2:
                         st.markdown(retrieved_text)
                 else:
                     st.warning("No relevant information found for your query. Try a different question.")
+            else:
+                st.warning("Please enter a question first.")
                     
         st.markdown("</div>", unsafe_allow_html=True)
     else:
@@ -746,4 +783,6 @@ with col2:
         
         1. First, upload a PDF document or enter a website URL
         2. Process the content to extract information
-        3. Once processing is complete, you can ask questions about the content""")
+        3. Once processing is complete, you can ask questions about the content
+        """)
+        st.markdown("</div>", unsafe_allow_html=True)
